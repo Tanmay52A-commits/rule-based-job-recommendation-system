@@ -982,7 +982,13 @@ from geopy.extra.rate_limiter import RateLimiter
 from typing import Optional, Tuple
 from recommender import recommend_jobs  # Rule-based model
 import openai
-
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.cluster import (
+    KMeans, DBSCAN, MeanShift, OPTICS, SpectralClustering,
+    AgglomerativeClustering, Birch, AffinityPropagation
+)
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -1074,6 +1080,34 @@ def get_coordinates(name: str, cache: dict) -> Optional[Tuple[float, float]]:
           .to_csv(CACHE_FILE, mode='a', header=not CACHE_FILE.exists(), index_label='location')
         return coords
     return None
+tuned_algorithms = {
+    "KMeans":          KMeans(n_clusters=N_CLUSTERS, random_state=42),
+    "DBSCAN":          DBSCAN(eps=1.0, min_samples=4),
+    "HDBSCAN":         hdbscan.HDBSCAN(min_cluster_size=15, min_samples=7),
+    "Agglomerative":   AgglomerativeClustering(n_clusters=N_CLUSTERS),
+    "GMM":             GaussianMixture(n_components=N_CLUSTERS, random_state=42),
+    "Birch":           Birch(n_clusters=N_CLUSTERS),
+    "MeanShift":       MeanShift(bandwidth=2.0),
+    "OPTICS":          OPTICS(min_samples=5, xi=0.05),
+    "Spectral":        SpectralClustering(n_clusters=N_CLUSTERS, affinity="nearest_neighbors"),
+    "AffinityProp":    AffinityPropagation(damping=0.9, preference=-50),
+}
+@st.cache_data
+def run_tuned_clustering(job_pca: np.ndarray):
+    results = []
+    for name, model in tuned_algorithms.items():
+        if hasattr(model, "fit_predict"):
+            labels = model.fit_predict(job_pca)
+        else:
+            labels = model.fit(job_pca).predict(job_pca)
+        if len(set(labels)) <= 1:
+            results.append((name, -1.0, np.inf, labels))
+            continue
+        sil = silhouette_score(job_pca, labels)
+        db  = davies_bouldin_score(job_pca, labels)
+        results.append((name, sil, db, labels))
+    best = max(results, key=lambda x: x[1])
+    return best[0], best[3]
 
 # --- PAGE: LOGIN ---
 if st.session_state.page == 'login':
@@ -1214,15 +1248,19 @@ elif st.session_state.page == "unsupervised":
  
     # Sidebar for unsupervised inputs
     st.sidebar.header("Worker Profile")
-    w_nm    = st.sidebar.text_input("Name", "John Doe")
+    w_name   = st.sidebar.text_input("Name", "John Doe")
     w_city  = st.sidebar.text_input("City", "Mumbai")
-    w_skill = st.sidebar.text_input("Skills (comma-separated)", "Plumber")
-    w_sal   = st.sidebar.number_input("Monthly Wage (₹)", 0, value=30000)
+    w_skills = st.sidebar.text_input("Skills (comma-separated)", "Plumber")
+    w_salary   = st.sidebar.number_input("Monthly Wage (₹)", 0, value=30000)
     top_n   = st.sidebar.slider("Top N", 1, 20, 5)
     run_btn = st.sidebar.button("Run Unsupervised")
  
     if run_btn:
         # Prep text
+        df_uns = pd.read_csv(
+            "Data_Innodatatics1 - Data_Innodatatics1.csv",
+            engine="openpyxl"
+        )
         df_uns = jobs_df.copy()
         df_uns["Avg_salary"] = (df_uns["Min salary"] + df_uns["Max salary"])/2
         mean_sal = df_uns.loc[df_uns["Avg_salary"]!=0,"Avg_salary"].mean()
