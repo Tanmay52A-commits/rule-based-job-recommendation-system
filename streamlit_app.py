@@ -1190,11 +1190,25 @@ elif st.session_state.page == 'main' and st.session_state.authenticated:
             st.warning("No jobs found matching your profile.")
 
 # --- PAGE: CHATBOT ---
-elif st.session_state.page == 'chatbot':
+# elif st.session_state.page == 'chatbot':
+#     st.title("💬 InnoDatatics Chat")
+#     if st.button("🔙 Back to Recommender"):
+#         st.session_state.page = 'main'
+#         st.rerun()
+#     for msg in st.session_state.messages:
+#         with st.chat_message(msg["role"]):
+#             st.markdown(msg["content"])
+#     if prompt := st.chat_input("Type your message…"):
+#         st.session_state.messages.append({"role":"user","content":prompt})
+#         with st.chat_message("assistant"):
+#             reply = run_flow(prompt, st.session_state.session_id,
+#                              st.session_state.user_data.get("name",""))
+#             st.markdown(reply)
+#             st.session_state.messages.append({"role":"assistant","content":reply})
+elif st.session_state.page == "chatbot":
     st.title("💬 InnoDatatics Chat")
-    if st.button("🔙 Back to Recommender"):
-        st.session_state.page = 'main'
-        st.rerun()
+    if st.button("🔙 Back"):
+        st.session_state.page = "main"; st.rerun()
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
