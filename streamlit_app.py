@@ -995,7 +995,46 @@ FLOW_ID           = "6fdd59ed-0109-491b-8576-3bf4932add58"
 GEOCODE_API_KEY   = "e16212d2c51a4da288bf22c3dced407d"
 CACHE_FILE        = Path("location_cache.csv")
 PCA_COMPONENTS    = 50
+import hdbscan
+from sklearn.cluster import (
+    KMeans, DBSCAN, MeanShift, OPTICS, SpectralClustering,
+    AgglomerativeClustering, Birch, AffinityPropagation
+)
+from sklearn.mixture import GaussianMixture
+from sklearn.metrics import silhouette_score, davies_bouldin_score
 
+# Number of clusters for methods requiring it
+N_CLUSTERS = 5
+
+ tune_algorithms = {
+    "KMeans":          KMeans(n_clusters=N_CLUSTERS, random_state=42),
+    "DBSCAN":          DBSCAN(eps=1.0, min_samples=4),
+    "HDBSCAN":         hdbscan.HDBSCAN(min_cluster_size=15, min_samples=7),
+    "Agglomerative":   AgglomerativeClustering(n_clusters=N_CLUSTERS),
+    "GMM":             GaussianMixture(n_components=N_CLUSTERS, random_state=42),
+    "Birch":           Birch(n_clusters=N_CLUSTERS),
+    "MeanShift":       MeanShift(bandwidth=2.0),
+    "OPTICS":          OPTICS(min_samples=5, xi=0.05),
+    "Spectral":        SpectralClustering(n_clusters=N_CLUSTERS, affinity="nearest_neighbors"),
+    "AffinityProp":    AffinityPropagation(damping=0.9, preference=-50),
+}
+def run_tuned_clustering(job_pca: np.ndarray):
+    results = []
+    for name, model in tune_algorithms.items():
+        if hasattr(model, "fit_predict"):
+            labels = model.fit_predict(job_pca)
+        else:
+            labels = model.fit(job_pca).predict(job_pca)
+        if len(set(labels)) <= 1:
+            # All in one cluster or noise
+            results.append((name, -1.0, np.inf, labels))
+            continue
+        sil = silhouette_score(job_pca, labels)
+        db  = davies_bouldin_score(job_pca, labels)
+        results.append((name, sil, db, labels))
+    # Choose the algorithm with highest silhouette score
+    best = max(results, key=lambda x: x[1])
+    return best[0], best[3]
 # Load static data
 jobs_df = pd.read_csv("jobs.csv")
 available_skills = sorted(jobs_df["Job type"].dropna().unique().tolist())
@@ -1210,8 +1249,9 @@ elif st.session_state.page == 'chatbot':
 elif st.session_state.page == "unsupervised":
     st.title("🤖 Unsupervised Job Recommendation")
     if st.button("🔙 Back"):
-        st.session_state.page = "main"; st.rerun()
- 
+        st.session_state.page = 'main'
+        st.rerun()
+
     # Sidebar for unsupervised inputs
     st.sidebar.header("Worker Profile")
     w_nm    = st.sidebar.text_input("Name", "John Doe")
@@ -1220,7 +1260,7 @@ elif st.session_state.page == "unsupervised":
     w_sal   = st.sidebar.number_input("Monthly Wage (₹)", 0, value=30000)
     top_n   = st.sidebar.slider("Top N", 1, 20, 5)
     run_btn = st.sidebar.button("Run Unsupervised")
- 
+
     if run_btn:
         # Prep text
         df_uns = jobs_df.copy()
@@ -1229,7 +1269,7 @@ elif st.session_state.page == "unsupervised":
         df_uns["Avg_salary"].replace(0, mean_sal, inplace=True)
         df_uns["job_text"] = (df_uns["Job type"] + " role in " + df_uns["State"]
                               + ". Avg ₹" + df_uns["Avg_salary"].astype(int).astype(str))
- 
+
         # Embedding + PCA
         mdl   = init_model()
         emb   = mdl.encode(df_uns["job_text"].tolist(), show_progress_bar=False)
@@ -1237,29 +1277,29 @@ elif st.session_state.page == "unsupervised":
         emb_s = scaler.transform(emb)
         pca  = PCA(n_components=PCA_COMPONENTS, random_state=42)
         job_pca = pca.fit_transform(emb_s)
- 
-        # Cluster
+
+        # Cluster with all tuned methods
         best_name, labels = run_tuned_clustering(job_pca)
         df_uns["cluster"] = labels
         st.success(f"Best algorithm: {best_name}")
- 
+
         # Worker embed + transform
         skill_texts = [f"{sk.strip()} seeking role in {w_city}" for sk in w_skill.split(",")]
         skill_emb   = mdl.encode(skill_texts, show_progress_bar=False)
         emb_w_s     = scaler.transform(skill_emb)
         w_pca_full  = pca.transform(emb_w_s)
         w_pca       = w_pca_full.mean(axis=0).reshape(1,-1)
- 
+
         # Assign to cluster by nearest job
         dists      = np.linalg.norm(job_pca - w_pca, axis=1)
         worker_cl  = int(df_uns.loc[dists.argmin(),"cluster"])
         st.write(f"Worker assigned to cluster **{worker_cl}**")
- 
+
         # Compute semantic similarity
         worker_emb = skill_emb.mean(axis=0).reshape(1,-1)
         sims       = cosine_similarity(worker_emb, emb).flatten()
         df_uns["sim"] = sims
- 
+
         # Show top-N in that cluster
         subset = df_uns[df_uns["cluster"]==worker_cl]
         top_jobs = subset.nlargest(top_n, "sim")
@@ -1268,6 +1308,7 @@ elif st.session_state.page == "unsupervised":
             st.markdown(f"**{row['Company']}**  \n"
                         f"{row['Job type']} — {row['State']}  \n"
                         f"Similarity: {row['sim']:.2f}")
+
 
 # --- PAGE: ADMIN VIEW ---
 elif st.session_state.page == 'admin_view' and st.session_state.authenticated:
